@@ -1,0 +1,278 @@
+---
+title: "Male_Lambs"
+author: "Kevin Dang"
+date: "2024-06-07"
+output: html_document
+---
+
+```{r read_data}
+rm(list=ls())
+# rmarkdown::render("~/Work/MScProjects/2024/Kevin_Dang/R/Soay_Sheep_R2.Rmd")
+#rmarkdown::render(")
+
+data_path<-"/Users/demidang/Downloads/Soay_Sheep"
+setwd("/Users/demidang/Downloads/Soay_Sheep")
+
+Fecundity<-read.csv(file.path(data_path, "Fecundity.csv")) 
+Birth_Data<-read.csv(file.path(data_path, "Birth_Data.csv")) 
+Horn_Data<-read.csv(file.path(data_path, "Horn_Data.csv")) 
+Pop_Data<-read.csv(file.path(data_path, "Population_Data.csv")) 
+```
+
+```{r setup}
+#Formatting the Data
+
+Male_Data<-merge(Fecundity, Horn_Data, by="ID")
+#Fecundity data is subsetted so it only retains male horns with normal morphologies "3"
+
+Male_Data<- Male_Data[Male_Data$ID>1,]
+#only getting IDs that are greater than 1
+#anything negative is a dummy individual
+
+
+
+
+data <- Male_Data[Male_Data$CapYear == Male_Data$YoB, ]
+#Capture Year equals its year of birth to get the individuals horn length in its first year of birth
+
+
+
+
+data<- subset(data, YoB>= 1986 & YoB <=2021)
+#only retaining data from 1986 to 2021
+data<-data[!is.na(data$HornLen),]
+#removing any IDs without any horn length data available
+
+
+data<- data[!duplicated(data$ID),]
+#only retaining the data only retaining the first measurement of the male lamb assuming they had all been measured at least once
+#no available data from 
+#1587 total male lambs with normal horn morphologies 
+#2771 total male lambs born from 1987 to 2023
+#only retaining 57% of the total lambs due to sampling 
+
+data$DoB <- as.Date(data$DoB, format = "%d-%b-%y")
+data$DoD <- as.Date(data$DoD, format ="%d-%b-%y")
+#formatting the date of birth and deaths 
+#into numbers instead of characters from excel 
+
+
+```
+
+```{r}
+#Spot Checking to see if data makes sense using random samples 
+
+set.seed(123)
+#setting the seed so the random rows are consistent
+sample1<- sample(1:nrow(data), 5)
+  
+data[sample1,]
+#all data in the sample are males with and normal horns present have horn length present 
+#capture year is the same as Year of Birth (YoB)
+
+
+
+
+```
+
+
+
+```{r environment}
+#Environmental Quality
+
+#making environmental quality based on birth data rather population census data
+
+
+
+Birth_Data<-Birth_Data[!duplicated(Birth_Data$ID),]
+#removing duplicates in Birth_Data to retain unique ID
+
+Birth_Data$DoB <- as.Date(Birth_Data $DoB, format = "%d-%b-%y")
+#formatting date of birth that is readable by R
+
+Birth_Data$DoD <- as.Date(Birth_Data$DoD, format ="%d-%b-%y")
+#converting death date data to dates that is readable by R
+
+total_lambs_per_year<-aggregate(ID~ YoB, data = Birth_Data, FUN=length)
+#aggregating IDs by their birth years to count how many were lambs were born per year
+
+names(total_lambs_per_year)[2]<- "Yr_Density"
+#renaming the aggregated dataset to call it Year Density 
+
+total_lambs_per_year
+#density of lambs per year 
+
+Birth_Data<- merge(Birth_Data, total_lambs_per_year, by = "YoB")
+#merging birth data so that every individual has a column with the densities of lamb present in the particular year
+
+
+
+
+FY_Survival <- vector("numeric", nrow(Birth_Data))
+#creating a column of first year survival 
+#to indicate the sheep survived to the following year
+#and survived the winter it was born in 
+#this data will be used for viability selection. 
+
+
+for (i in 1:nrow(Birth_Data)) {
+  
+  dob <- as.Date(Birth_Data$DoB[i])
+  #date of birth
+  dod <- as.Date(Birth_Data$DoD[i])
+  #date of death
+  
+  # Calculate the May 1st of the year after the year of birth
+  next_May <- as.Date(paste0(as.numeric(format(dob, "%Y")) + 1, "-05-01"))
+#  #adding 1 to the year of the birth to indicate survival to the next year
+##first of the may is the cutoff that qualifies if the the lambs make to the following year of nor
+
+  # Determine if the lamb survives to the next May
+  if (dod < next_May) {
+    FY_Survival[i] <- 0
+    #if the sheep did not make it to May 1st of the following year, then recieves a 0
+  } else {
+    FY_Survival[i] <- 1
+    #if the death date is not before first of may of the following year, this means that the lamb successfully survived and is a given a 1 
+  }
+}
+#for loop creates a FY_survival vector to indicate the lambs' first year survival 
+
+Birth_Data$FY_Survival<-FY_Survival
+#adding the new column to the existing dataframe
+
+survivor_per_year<- aggregate(FY_Survival ~ YoB,
+           data = Birth_Data, 
+          FUN = sum)
+#number of lambs that survived in that particular birth year
+#aggregagting the number of individual "1's" or sheep that sucessfully survive3d in each year. 
+
+names(survivor_per_year)[2]<- "Yr_Survivors"
+#calling new column Year Survivors 
+#survivros of year is a dataframe with two elements: year and the density in that particular year
+
+Birth_Data<- merge(Birth_Data, survivor_per_year, by = "YoB")
+#merging birth data by survivors per year 
+
+survivor_per_year
+```
+
+```{r spot}
+#SpotChecking to see if new column makes sense
+set.seed(235)
+#setting the seed so the random rows are consistent
+sample2<- sample(1:nrow(Birth_Data), 10)
+  
+Birth_Data[sample2,]
+
+#capture year is the same as Year of Birth
+#lambs that did survive did indeed have their death of date past the may of the next year
+```
+
+
+```{r survival}
+
+#getting survival rates per year to determine environmental quality
+Survival_Rate<- vector("numeric", nrow(Birth_Data))
+
+for (i in 1:nrow(Birth_Data)) {
+  Survival_Rate[i]<- Birth_Data$Yr_Survivors[i]/ Birth_Data$Yr_Density[i]
+}
+
+Birth_Data$Survival_Rate<-Survival_Rate
+#Survival rate is the proportion of survivors of a particular year to the number to the density. The Survival rate should therefore be below 1. 
+
+#adding survival rate to the birth data. Should equal the number of rows in 
+
+Survival_by_year <- aggregate(Survival_Rate ~ YoB, data = Birth_Data, FUN = mean, na.rm = TRUE)
+#aggregating the data to see the survival rate in every birth year
+
+Survival_by_year<- Survival_by_year[!(Survival_by_year$YoB %in% c(1975, 1976, 1977, 1978, 1979, 1980, 1981, 1982, 1983, 1984, 1985, 2022,2023)), ]
+#only retaining data from 1986 to 2021
+#2022 data is not updated
+
+
+
+quantiles <- quantile(Survival_by_year$Survival_Rate, probs =seq(0, 1, 0.25))
+
+quantiles
+#upper limit is 0.8451063
+#belongs to 1990--highest environmental quality
+#therefore the most lambs born in 1990 and surviving to 1991. 
+
+
+
+#binning survival rates into quantiles as per Matt Robinson et al., 2008.
+
+Survival_by_year$Env_Quality<- cut(Survival_by_year$Survival_Rate,
+           breaks = quantiles,
+ labels = c("Poor", "Medium-Poor", "Medium-Good", "Good"),
+                   include.lowest = TRUE)
+#four environmental qualities total 
+Survival_by_year
+
+table(Survival_by_year$Env_Quality)
+#equal amount of survival rates per environmental quality
+
+Birth_Data<- merge(Birth_Data, Survival_by_year, by = c("YoB", "Survival_Rate"))
+#merging birth data by survival by year to include environmental quality
+
+data2<-merge(Birth_Data, data, by= c("ID", "Sex", "Horn", "YoB", "DoD", "DoB"))
+#merging birth data to include environmental quality back in the original dataset
+#calling this data 2 to include yearly population information 
+
+#18 total columns in the resulting dataset
+
+Pop_Data$Year<-as.factor(Pop_Data$Year)
+data2<-merge(data2, Pop_Data, by.x = c("YoB"), by.y = c("Year"))
+#merging dataset to get the villagetotal, or overall density 
+```
+
+```{r spot2}
+set.seed(237)
+#setting the seed so the random rows are consistent
+sample3<- sample(1:nrow(data2), 10)
+  
+data2[sample3,]
+#all data in the sample are males with and normal horns present have horn length present with their respective environmental quality
+
+
+
+```
+
+
+```{r env}
+#plotting environmental quality to see how many 
+library(ggplot2)
+
+
+hist(Survival_by_year$Survival_Rate, main = "Histogram of Yearly Survival Rates", xlab = "Survival Rate", col = "lightblue", border = "black")
+
+abline(v = quantiles[c(2,3,4)] , col = "red", lwd = 2, lty = 2)
+#adding lines to represent the quantiles--25%, 50% and 75% cutoffs
+
+hist(total_lambs_per_year$Yr_Density, main="Histogram of Yearly Densities")
+
+quantiles
+ggplot(data2, aes(x = factor(Env_Quality))) +
+  geom_bar() +
+  labs(x = "Environmental Quality", y = "Count", title = "Count of Sheep in Each Environmental Quality")
+
+
+ggplot(data2, aes(x = Env_Quality, y = HornLen)) +
+  geom_boxplot(fill = "skyblue", color = "black", outlier.color = "red") +
+  labs(title = "Horn Measurements by Environmental Quality",
+       x = "Environmental Quality",
+       y = "Horn Measurements")
+
+summary(aov(HornLen~ Env_Quality, data = data2))
+#checking to see if the mean horn length in each category is significantly different from zero 
+#mean horn length do not seem to significantly between environmental qualities
+
+
+summary(aov(HornLen~YoB, data=data2))
+#horn length is significantly different between categories of environmental quality
+
+
+```
+

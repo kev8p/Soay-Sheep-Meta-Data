@@ -1,0 +1,525 @@
+---
+title: "Soay Sheep Analysis Random Regression Models"
+output: 
+  html_document:
+     toc: true
+date: "2024-07-18"
+---
+
+```{r set}
+rm(list=ls())
+#remove everything from memory
+
+# rmarkdown::render("~/Work/MScProjects/2024/Kevin_Dang/R/Soay_Sheep_Analysis.Rmd")
+setwd("C:/Users/s2599180/Downloads")
+#setwd("/Users/jhadfiel/Work/MScProjects/2024/Kevin_Dang/Data/Raw")
+
+
+data2 <- read.csv("Male_Fecundity_Survival_Data.csv")
+data3 <- read.csv("Male_LBS_Data.csv")
+
+library(lme4)
+library(glmmTMB)
+library(MCMCglmm)
+library(ggplot2)
+
+scale_horn_length<-TRUE
+
+```
+
+Formatting the dataframe and scaling horn length throughout all models 
+
+```{r model1}
+
+data2$YoB <- as.factor(data2$YoB)
+#making year of birth as a factor 
+
+data2$died_before <- (data2$DoD < as.Date(paste(data2$YoB, "-10-01", sep="")))
+# died before breeding true and false
+
+
+data2 <- subset(data2, !(FY_BreedingSuccess==1 & data2$died_before))
+# remove 39 individuals that appeared as successful fathers yet died before the rut.
+# 3 individuals that died before rut but still bred successfully. They all died the same day interestingly
+
+if(scale_horn_length){
+  data2$HornLen<-scale(data2$HornLen)
+
+  HornLen_shift<-attr(data2$HornLen,"scaled:center")
+  HornLen_scale<-attr(data2$HornLen,"scaled:scale")
+}else{
+  HornLen_shift<-0
+  HornLen_scale<-1
+}
+
+# True Horn Length  = data2$HornLen*HornLen_scale+HornLen_shift
+# True slope = slope_est/HornLen_scale
+```
+
+
+
+# Models for First Year Survival
+
+## Model Structures
+
+ Looking to see how horn length influences probability of a male lamb surviving based on the year of birth he was born into
+ 
+```{r models1}
+# using random regressions
+
+
+#interpret results in terms of unscaled horn length 
+FY_Viability2<-glmer(FY_Survival~HornLen+(1+HornLen|YoB), 
+                 data=data2, 
+                 family=binomial)
+
+
+#using density as a continuous variable
+#including the interaction between year density and horn length
+FY_Viability3 <- glmer(FY_Survival~ HornLen + scale(Village.Total)+ (1 | YoB) + HornLen*scale(Village.Total),
+                          data = data2,
+                          family = binomial)
+
+
+```
+## Interpretations
+```{r interpreations1}
+summary(FY_Viability2)
+
+summary(FY_Viability3)
+#horn length decreases the probability of survival in this model
+```
+#interpretation for unscaled horn length
+The estimated variance between years in the random regression model (models 2) on length slope horn length is 0.0001092. This is also significant with the p-value being >0.05.   
+
+The perfect negative correlation (-1.00) between the intercept and HornLen random effects within YoB groups means that as the intercept varies (up or down) across YoB groups, the corresponding variation in HornLen tends to move in the opposite direction. An extremely high intercept is indicated more extreme slope (magnitude) 
+
+This could imply that years of birth with a higher initial survival(indicating a so-called "better environment") rate tend to have a more negative slope between horn length and survival probability
+
+The mean horn length (pooled across years) +/- 2 standard deviations away from the in-between year variance on slopes:
+0.0048 +/- 0.0209
+
+(0.025632, -0.016168) 95% of the slopes taken from a normal distribution predicted by the model lie between a 2% increase in survival probability per milliliter in horn length and a -1.6% decrease in survival per horn length when investing (that's kinda a lot)
+
+
+With the model as density as fixed effect, increasing horn length seems to slightly increase the probability of surviving with higher density, possibly due pressures of having a bigger horns in a more competitive environment
+
+
+
+## Significance 
+Checking the significance of the between-year variance based on first year survival by comparing it to a reduced model to exclude the random slope
+
+```{r significance}
+FY_Viability2.reduced<-glmer(FY_Survival~HornLen+(1|YoB),
+                 data=data2, 
+                 family=binomial)
+
+
+anova(FY_Viability2, FY_Viability2.reduced)
+```
+This extremely low p-value (p<0.001) suggests that the effect of horn length on first year survival does vary significantly across different birth years. This may be evidence of fluctuating selection on viability
+
+
+## Plot 
+Plotting the random regression coefficients and only looking at the slope coefficients between years
+```{r plot1.2}
+
+
+
+random_effects1<- ranef(FY_Viability2)$YoB+fixef(FY_Viability2)["HornLen"]
+# Extract only the coefficients for HornLen
+#adding the horn length coefficient 
+#random regression assumes centered around zero from a normal distributions
+#random effects are deviations from the mean
+hornlen_effects1 <- random_effects1[,"HornLen"]
+
+viability_coefficients <- data.frame(
+  Year = as.numeric(rownames(random_effects1)),
+  HornLen = hornlen_effects1
+)
+#creating a dataframe without intercepts
+
+viability_coefficients$Prob<-plogis(random_effects1[,"(Intercept)"]+viability_coefficients$HornLen*mean(data2$HornLen))
+#creating a column called Prob with the log-odds ratio of each slope
+#probability of a lamb with the mean horn length in surviving in particular year
+#adding the intercept and the mean horn length to the random slope of that year
+
+viability_coefficients$Prob2<-plogis(random_effects1[,"(Intercept)"]+viability_coefficients$HornLen*mean(data2$HornLen))
+#creating a column called Prob with the probability of a lamb with the mean horn length breeding successfully
+
+
+#plot with the slopes (plogit)
+ggplot(viability_coefficients, aes(x = Year, y = HornLen)) +geom_hline(yintercept = fixef(FY_Viability2)["HornLen"], linetype = "dashed", color = "red") +
+  geom_line() +
+  geom_point() +
+  labs(title = "Random Slope of First Year Horn Length on First Year Survival Year of Birth",
+       x = "Year of Birth",
+       y = "Random Slope Coefficients (Plogit)") +
+  theme_minimal()
+#able to see the slope fluctuate between years
+
+#significant variation in slopes= likelihood of fluctuating selection
+
+#plot with probabilities of survival
+ggplot(viability_coefficients, aes(x = Year, y = Prob)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Odds Ratio of Lamb with Mean Horn Length Surviving by Year of Birth",
+       x = "Year of Birth",
+       y = "Probability") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 10)
+  )
+
+
+lm(HornLen~Year, data=viability_coefficients)
+#the slope seems to be slightly increasing across years 
+
+```
+
+
+# Models for First Year Fecundity
+
+
+## True Fecundity  
+Inspecting fecundity metric and obtaining true fecundity by conditioning fecundity by survival
+
+```{r true fecundity}
+bred_not_survived <- data2$FY_BreedingSuccess == 1 & data2$FY_Survival == 0
+sum(data2$bred_not_survived)
+#56 individuals reproduced but did not survive
+data2[bred_not_survived, c("ID", "DoD")]
+```
+
+## Model Structures 
+
+Looking to see how horn length influences probability of a male lamb breeding successfully in based on the birth year
+
+```{r model2}
+
+
+FY_Fecundity<-glmer(FY_BreedingSuccess~HornLen+Env_Quality+ (1|YoB)+ HornLen*Env_Quality, 
+                 data=data2, 
+                 family=binomial)
+
+
+
+
+#via random regression
+FY_Fecundity2<-glmer(FY_BreedingSuccess~HornLen+(1+HornLen|YoB), 
+                 data=subset(data2, !died_before), 
+                 family=binomial)
+
+
+FY_Fecundity3 <- glmer(FY_BreedingSuccess~ HornLen + scale(Village.Total)+ (1 | YoB) + HornLen*scale(Village.Total),
+                          data = subset(data2, !died_before),
+                          family = binomial)
+
+
+```
+
+
+
+## Interpretations 
+
+Interpreting the random regression model looking at how the slope between unscaled horn length in the lamb's first year and his breeding success fluctuates between years
+
+
+```{r interpretation2.2}
+summary(FY_Fecundity2)#random regression
+summary(FY_Fecundity3)#density
+
+```
+
+
+The variance of 0.00002567 (0.0001018 for true fecundity) represents the variability in the slopes across different years of birth. This variance would suggest that the relationship between HornLen and BreedingSuccess changes slightly from year to year.
+
+The correlation of -0.94 (-0.92 for true fecundity) between the random intercept and random slope indicates a strong negative correlation. This means that for a given year of birth, if the intercept is higher, the slope of HornLen on the lamb's probability of breeding successfully that year will be lower than the overall average, and vice versa. As the  probability for a lamb to breed his in a given year of birth when the horn length is zero (the base-level survival), the probability of survival as horn length increases (the slope) decreases
+
+
+The mean horn length (pooled across years) +/- 2 standard deviations away from the in-between year variance on slope on first-year fecundity
+positive slope between  horn length and first year fecundity across years
+  0.009546  +/- 0.01
+  (-0.000395 0.019546) 95% of the slopes taken from a normal distribution predicted by the model lie between a 2% increase in survival probability per milliliter in horn length and an extremely low decrease in the probability of fecundity in the first year per horn length (this is essentially zero)
+horn length seems to positively increase fecundity instead of being detrimental across years, whereas comparing it to survival there were years where investing in horn length was detrimental to the lamb
+
+
+For the density, horn length increases the probability of first year fecundity in general. However, like the survival model with density, having a higher horn length increases the probability of breeding successfully as the density increases. This may also be due being born in high density environment increases competition pressures and sexual selection is at play. However, this is not significant. 
+
+
+## Significance
+
+Checking the significance of the between-year variance based on first year fecundity by comparing it to a reduced model to exclude the random slope
+
+```{r significance2}
+#checking the significance of the 
+
+
+
+#checking the significance of the random regression model by removing the random slopes
+FY_Fecundity2.reduced<-glmer(FY_BreedingSuccess~HornLen+(1|YoB),
+                 data=subset(data2, !died_before), 
+                 family=binomial)
+
+anova(FY_Fecundity2, FY_Fecundity2.reduced)
+
+```
+
+This p-value (p-value> 0.05) when comparing to a reduced model with the random effects suggests that the variation between years on of horn length on first year fecundity does not vary significantly across different birth years. This may indicate that there is no evidence for fluctuating selection on fecundity. The p-value is also 0.1375 for true fecundity
+The standard deviation is 0.00465 which is also pretty low compared to survival 
+
+
+
+## Plot
+
+plotting the random regression coefficients and only looking at the fecundity slope coefficients between years
+
+
+```{r plot2.2}
+
+random_effects2<- ranef(FY_Fecundity2)$YoB+fixef(FY_Fecundity2)["HornLen"]
+fixef(FY_Fecundity2)["HornLen"]
+
+hornlen_effects2 <- random_effects2[,"HornLen"]
+
+fecundity_coefficients <- data.frame(
+  Year = as.numeric(rownames(random_effects2)),
+  HornLen = hornlen_effects2
+)
+#creating a dataframe without intercepts
+#creating a column with the year and random regression slopes
+
+fecundity_coefficients$Prob<-plogis(fecundity_coefficients$HornLen)-.5
+#log odds ratio of breeding successfully
+#centering it around 50% 
+
+
+fecundity_coefficients$Prob2<-plogis(random_effects2[,"(Intercept)"]+fecundity_coefficients$HornLen*mean(data2$HornLen))
+#creating a column called Prob with the probability of a lamb with the mean horn length breeding successfully
+
+
+#Plot based on the slope on a logit scale
+ggplot(fecundity_coefficients, aes(x = Year, y = HornLen)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = fixef(FY_Fecundity2)["HornLen"], linetype = "dashed", color = "red") +
+  labs(title = "Random Effects of First Year Horn Length on Fecundity Slope by Year of Birth",
+       x = "Year of Birth",
+       y = "Random Slope Coefficients (Plogit)") +
+  theme_minimal()+
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14) # Center, bold, and enlarge title
+  )
+#able to see the slope fluctuate between years
+
+#significant variation in slopes= likelihood of fluctuating selection
+
+
+
+lm(HornLen~Year, data=fecundity_coefficients)
+#the slope for fecundity seems to be slightly increasing across years (0.0002972)
+
+#more recent years there seems to be constant increase in horn length on fecundity indicating poorer environments and thus pressure to increase horn length (is this extrapolating?)
+
+#plot with probabilities
+ggplot(fecundity_coefficients, aes(x = Year, y = Prob)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Odds Ratio of First Year Breeding Success Based Per 1mm of Horn Length by Year of Birth",
+       x = "Year of Birth",
+       y = "Probability of Breeding Success") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 9)+
+  scale_x_continuous(breaks = unique(fecundity_coefficients$Year), labels = unique(fecundity_coefficients$Year))
+  )
+
+#plot with probability of mean horn length sheep surviving
+ggplot(fecundity_coefficients, aes(x = Year, y = Prob2)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Odds Ratio of Lamb with Mean Horn Length Breeding Successfully by Year",
+       x = "Year of Birth",
+       y = "Probability") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 9))
+
+
+```
+
+
+
+# Tradeoff
+
+
+## Plot
+Plotting the the viability and fecundity slopes
+
+Survival and Fecundity seem to have a similar trend, however, horn length on survival seems to have more drastic influence on the lamb 
+
+```{r tradeoff plot}
+
+viability_coefficients$Type <- "Survival"
+fecundity_coefficients$Type <- "Fecundity"
+combined_coefficients <- rbind(viability_coefficients, fecundity_coefficients)
+
+
+# Replace with your actual fixed effects from the models
+fixef_HornLen_Survival <- fixef(FY_Viability2)["HornLen"]
+fixef_HornLen_Fecundity <-fixef(FY_Fecundity2)["HornLen"]
+
+# Create the plot
+ggplot(combined_coefficients, aes(x = Year, y = HornLen, color = Type)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "First Year Horn Length on Survival and Fecundity by Year of Birth",
+    x = "Year of Birth",
+    y = "Random Slope Coefficients (Plogit)"
+  ) +
+  scale_x_continuous(breaks = seq(min(combined_coefficients$Year), max(combined_coefficients$Year), by = 1)) + # Ensure all years are included
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14) # Center, bold, and enlarge title
+  ) +
+  scale_color_manual(values = c("Survival" = "blue", "Fecundity" = "red"))
+
+
+
+```
+The variance for survival is clearly much higher than the variance for survival
+
+
+
+##Looking at the correlation between the viability and fecundity random slopes to see if potential tradeoffs exist between years
+
+```{r correlation}
+
+cor(hornlen_effects1, hornlen_effects2)
+#there seems to be a strong positive correlation between horn length's influence on first year survival and fecundity at 0.72, indicating that in years where the investment in horn length a lamb's increases a lamb's survival also increases his probability of breeding successfully in his first year
+```
+
+This may not be precise due to standard errors of each slope estimate so a bivariate regression is more suitable. Doing so by combining the response for first year survival and fecundity into a single dataframe and comparing the random slopes of each in the same model
+
+```{r bivariate}
+#adding an interaction between the trait and horn length within the random term
+
+# These are all reparametrisations
+# (trait - 1 + trait:HornLen | YoB)
+# (1+trait + trait:HornLen | YoB)
+# (trait*HornLen | YoB)
+
+
+
+#stack the data to create a long data
+long_data<-rbind(data2, data2)
+long_data$trait<-gl(2, nrow(data2), labels=c("Fec", "Surv"))
+#2 level factor to seperate response variables to compare
+long_data$y<-long_data$FY_BreedingSuccess
+long_data$y[which(long_data$trait=="Surv")]<-data2$FY_Survival
+
+long_data2<-subset(long_data, !(trait == "Fec" & died_before))
+#removing individuals where they bred but did not survive successfully
+
+bivariate_model<- glmer(y ~ HornLen * trait + (trait - 1 + trait:HornLen | YoB)+(1|ID),
+                           data = long_data2,
+                           family = binomial)
+
+#interaction between trait value and horn length slope within year of birth 
+
+
+summary(bivariate_model)
+
+VarCorr(bivariate_model)$YoB
+#nearly a positive correlation at 0.997 between survival and fecundity
+
+
+bivariate_model.reduced <- glmer(y ~ HornLen * trait + (trait - 1 + at.level(trait, "Surv"):HornLen | YoB)+(1|ID),
+                           data = long_data2,
+                           family = binomial)
+# bivariate model without random fecundity slopes.
+
+anova(bivariate_model,bivariate_model.reduced)
+#selection on fecundity still not significant even within the bivariate model
+
+
+```
+
+The variance for survival when looking at the bivariate model is considerably higher than the variance for fecundity, which was also present in the univariate model(s). The correlation is also very high at 0.997 which is nearly 1 and therefore, as horn length tends to increase fecundity in a year, it also tends to increase its chance of survival. However, horn length fecundity was not found to be significant in the univariate model. It was additionally not to be found significant in the bivariate model. Overall, a tradeoff in the year of birth may not occur. 
+
+
+
+# Model for Lifetime Breeding Success
+
+Looking to see how horn length influences a male lamb's lifetime breeding success based on the environmental condition he was born into
+
+```{r model3}
+
+
+library(glmmTMB)#dealing with over-dispersion using observation-based random effects
+data3$Obs_ID <- 1:nrow(data3)
+
+
+
+Sexual.Selection2<-glmer(LBS~HornLen+ (1|Obs_ID)+ (1+HornLen|YoB), 
+                    data=data3, 
+                    family=poisson)
+#Horn length and Year of birth are now fixed effects
+#each year of birth can have its own relationship between horn length and lifetime breeding success (LBS).
+#model with multiple random effects? is this bad
+
+summary(Sexual.Selection2)
+#The intercept variance (4.386e+00) suggests there is considerable variability in horn length across different birth years.
+#The slope variance (2.771e-05) is very small, indicating the effect of horn length on the individual's lifetime breeding success is constant across different birth years.
+
+Sexual.Selection3<- glmmTMB(LBS~HornLen+ scale(Village.Total)+(1|Obs_ID)+ scale(Village.Total)*HornLen, 
+                    data=data3, 
+                    family=poisson)
+summary(Sexual.Selection3)
+#increasing horn length in the first year tends to decrease lifetime breeding success in general
+#increasing density also decreases lifetime breeding success
+#the interaction indicates that having a higher horn length and being born in higher density environment also tends to mitigate the negative effect of horn length on lifetime breeding success
+#however, these values are not significant
+
+```
+
+
+Model Interpretations for Lifetime Breeding Success
+
+
+```{r interpret3}
+
+
+#Although the there seems to be positive increase in horn length with lifetime breeding success, this is not statistical significant based on the high p-value.
+
+#Compared to the baseline "Poor" environment, being in a "Good" environment is associated with a significantly higher log count of LBS (8.00482). This implies that individuals in better environments have much higher reproductive success. This makes sense biologically as better environments likely provide more resources, lower mortality rates, and better overall conditions for breeding.
+
+#The negative coefficients for these interactions suggest that the positive effect of horn length on LBS decreases in better environments. 
+
+#In the "Good" environment, the reduction is the most pronounced. The interaction term suggests that while the "Good" environment significantly boosts LBS overall, the advantage provided by longer horns is less pronounced. 
+
+#Overall, this implies that in harsh environments, physical traits like horn length become more critical for survival and mating success?
+```
+
+
+Checking the significance of the between-year variance on horn length based on lifetime breeding by comparing it to a reduced model to exclude the random slope
+```{r significance3}
+
+
+Sexual.Selection2.reduced<-glmer(LBS~HornLen+(1|Obs_ID)+(1|YoB), 
+                    data=data3, 
+                    family=poisson)
+
+
+anova(Sexual.Selection2, Sexual.Selection2.reduced)
+#p-value = 0.2984 The p-value suggests that the effect of horn length on lifetime breeding success (slope) does not significantly across different birth years. 
+
+```
+
